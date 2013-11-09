@@ -183,6 +183,7 @@ class BenchmarkRunner(object):
 
         results = self._run_revision(rev, active_benchmarks)
 
+        self.db.begin_transaction()
         for checksum, timing in results.iteritems():
             timestamp = self.repo.commits.timestamps[rev]
 
@@ -215,6 +216,7 @@ class BenchmarkRunner(object):
                                  timing.get('loops'),
                                  timing.get('timing'),
                                  timing.get('traceback'))
+        self.db.commit_transaction()
 
         return any_succeeded, len(active_benchmarks)
 
@@ -223,12 +225,14 @@ class BenchmarkRunner(object):
         ex_benchmarks = self.db.get_benchmarks()
         db_checksums = set(ex_benchmarks.index)
         log.info("Registering %d benchmarks" % len(ex_benchmarks))
+        self.db.begin_transaction()
         for bm in self.benchmarks:
             if bm.checksum in db_checksums:
                 self.db.update_name(bm)
             else:
                 log.info('Writing new benchmark %s, %s' % (bm.name, bm.checksum))
                 self.db.write_benchmark(bm)
+        self.db.commit_transaction()
 
     def _run_revision(self, rev, benchmarks):
         # for enhanced logging -- get information about the revision:

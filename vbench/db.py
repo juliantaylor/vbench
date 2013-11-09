@@ -19,6 +19,8 @@ class BenchmarkDB(object):
         self._engine = create_engine('sqlite:///%s' % dbpath)
         self._metadata = MetaData()
         self._metadata.bind = self._engine
+        self._transaction = None
+        self._connection = None
 
         self._benchmarks = Table('benchmarks', self._metadata,
             Column('checksum', sqltypes.String(32), primary_key=True),
@@ -99,9 +101,23 @@ class BenchmarkDB(object):
             stmt = t.delete().where(t.c.checksum == chksum)
             self.conn.execute(stmt)
 
+    def begin_transaction(self):
+        assert not self._transaction
+        log.debug("Start transaction")
+        conn = self.conn
+        self._transaction = conn.begin()
+
+    def commit_transaction(self):
+        assert self._transaction
+        log.debug("End transaction")
+        self._transaction.commit()
+        self._transaction = None
+
     @property
     def conn(self):
-        return self._engine.connect()
+        if not self._connection:
+            self._connection = self._engine.connect()
+        return self._connection
 
     def write_benchmark(self, bm, overwrite=False):
         """
