@@ -52,6 +52,7 @@ class BenchmarkRunner(object):
                  run_option='eod', run_order='normal',
                  start_date=None,
                  existing='skip',
+                 nochange_rerun_limit=5,
                  module_dependencies=None,
                  always_clean=False,
                  use_blacklist=True,
@@ -68,6 +69,7 @@ class BenchmarkRunner(object):
         self.run_order = run_order
         assert(existing in ('skip', 'min'))
         self.existing = existing
+        self.nochange_rerun_limit = nochange_rerun_limit
 
         self.repo_path = repo_path
         self.db_path = db_path
@@ -192,16 +194,22 @@ class BenchmarkRunner(object):
                 assert(len(b_prev_results) < 2) # should be none or just 1 entry
                 if len(b_prev_results):
                     old_timing = b_prev_results.ix[0].to_dict()
-                    if old_timing['timing'] and (old_timing['timing'] < timing.get('timing')):
+                    diff = 0
+                    if old_timing['timing']:
+                        diff = (old_timing['timing'] - timing.get('timing')) / timing['timing']
+                    if old_timing['timing'] and diff < 0.005:
                         # we had better result already -- skip saving this one
                         log.debug("Benchmark %s was already timed at %(timing)f - skipping"
                                   % old_timing)
+                        # increment no change counter
+                        self.db.increment_nochange(checksum, rev=rev)
                         continue
                     else:
                         # we had worse results -- so remove them from
                         # DB in favor of new ones to be introduced
                         log.debug("Benchmark %s was timed before at %(timing)f - deleting"
                                   % old_timing)
+                        log.debug("Diff: %.1f%%: %g, %g" % (diff * 100, timing['timing'], old_timing['timing']))
                         self.db.delete_benchmark_results(checksum, rev=rev)
             self.db.write_result(checksum, rev, timestamp,
                                  timing.get('loops'),
@@ -286,9 +294,20 @@ class BenchmarkRunner(object):
             if b.start_date is not None and b.start_date > timestamp:
                 continue
 
-            if (b.checksum not in existing_results) \
-                or (rerun_good_ones and existing_results[b.checksum]['ncalls']):
+            if (b.checksum not in existing_results):
                 need_to_run.append(b)
+            elif (rerun_good_ones and existing_results[b.checksum]['ncalls']):
+                lim = self.nochange_rerun_limit
+                ucount = existing_results[b.checksum]['nnochange']
+                if ucount < lim:
+                    log.debug('Running benchmarks %s as nnochange ' \
+                              'counter %d < %d' %  (b.name, ucount, lim))
+                    need_to_run.append(b)
+                else:
+                    # minimum timing has not changed in a while
+                    # skip this stable benchmark
+                    log.debug('Skipping benchmarks %s as nnochange ' \
+                              'counter %d >= %d' % (b.name, ucount, lim))
 
         return need_to_run
 

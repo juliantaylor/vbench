@@ -33,6 +33,7 @@ class BenchmarkDB(object):
             Column('ncalls', sqltypes.String(50)),
             Column('timing', sqltypes.Float),
             Column('traceback', sqltypes.Text),
+            Column('nnochange', sqltypes.Integer),
         )
 
         self._blacklist = Table('blacklist', self._metadata,
@@ -68,6 +69,18 @@ class BenchmarkDB(object):
         stmt = (table.update().
                 where(table.c.checksum == benchmark.checksum).
                 values(checksum=benchmark.checksum))
+        self.conn.execute(stmt)
+
+    def increment_nochange(self, checksum, rev):
+        """
+        increment no change counter of benchmark of revision
+        """
+        tab = self._results
+        select_args = [tab.c.checksum == checksum,
+                       tab.c.revision == rev]
+        stmt = (tab.update().
+                where(sql.and_(*select_args)).
+                values(nnochange=tab.c.nnochange + 1))
         self.conn.execute(stmt)
 
     def restrict_to_benchmarks(self, benchmarks):
@@ -108,14 +121,15 @@ class BenchmarkDB(object):
         # TODO -- delete from benchmarks table
 
     def write_result(self, checksum, revision, timestamp, ncalls,
-                     timing, traceback=None, overwrite=False):
+                     timing, traceback=None, nnochange=0, overwrite=False):
         """
 
         """
         ins = self._results.insert()
         ins = ins.values(checksum=checksum, revision=revision,
                          timestamp=timestamp,
-                         ncalls=ncalls, timing=timing, traceback=traceback)
+                         ncalls=ncalls, timing=timing, traceback=traceback,
+                         nnochange=nnochange)
         self.conn.execute(ins)  # XXX: return the result?
 
     def delete_error_results(self):
@@ -180,7 +194,7 @@ class BenchmarkDB(object):
         select_args = [tab.c.checksum == checksum]
         if rev: select_args.append(tab.c.revision == rev)
         stmt = sql.select([tab.c.timestamp, tab.c.revision, tab.c.ncalls,
-                           tab.c.timing, tab.c.traceback],
+                           tab.c.timing, tab.c.traceback, tab.c.nnochange],
                           sql.and_(*select_args))
         results = self.conn.execute(stmt)
 
