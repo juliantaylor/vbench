@@ -40,6 +40,13 @@ class BenchmarkRunner(object):
         'skip' : do not re-run the benchmark if already estimated
         'min'  : re-run and store possibly updated better (min)
                  estimate
+    nochange_rerun_limit:
+        if existing = 'min' benchmarks which have not updated a new timing
+        minimum nochange_rerun_limit times will always be rerun
+    nochange_rerun_ratio:
+        if existing = 'min' rerun benchmarks if the ratio between number of
+        runs without new minimum timing and total number of run is below this
+        threshold
     dependencies : list or None
         should be list of modules visible in cwd
     """
@@ -53,6 +60,7 @@ class BenchmarkRunner(object):
                  start_date=None,
                  existing='skip',
                  nochange_rerun_limit=5,
+                 nochange_rerun_ratio=0.5,
                  module_dependencies=None,
                  always_clean=False,
                  use_blacklist=True,
@@ -70,6 +78,7 @@ class BenchmarkRunner(object):
         assert(existing in ('skip', 'min'))
         self.existing = existing
         self.nochange_rerun_limit = nochange_rerun_limit
+        self.nochange_rerun_ratio = nochange_rerun_ratio
 
         self.repo_path = repo_path
         self.db_path = db_path
@@ -189,33 +198,39 @@ class BenchmarkRunner(object):
 
             any_succeeded = any_succeeded or 'timing' in timing
 
+            b_prev_results = []
             if self.existing == 'min':
                 # verify that we have no information on this benchmark already
                 b_prev_results = self.db.get_benchmark_results(checksum, rev=rev)
                 assert(len(b_prev_results) < 2) # should be none or just 1 entry
-                if len(b_prev_results):
-                    old_timing = b_prev_results.ix[0].to_dict()
-                    diff = 0
-                    if old_timing['timing']:
-                        diff = (old_timing['timing'] - timing.get('timing')) / timing['timing']
-                    if old_timing['timing'] and diff < 0.005:
-                        # we had better result already -- skip saving this one
-                        log.debug("Benchmark %s was already timed at %(timing)f - skipping"
-                                  % old_timing)
-                        # increment no change counter
-                        self.db.increment_nochange(checksum, rev=rev)
-                        continue
-                    else:
-                        # we had worse results -- so remove them from
-                        # DB in favor of new ones to be introduced
-                        log.debug("Benchmark %s was timed before at %(timing)f - deleting"
-                                  % old_timing)
-                        log.debug("Diff: %.1f%%: %g, %g" % (diff * 100, timing['timing'], old_timing['timing']))
-                        self.db.delete_benchmark_results(checksum, rev=rev)
-            self.db.write_result(checksum, rev, timestamp,
-                                 timing.get('loops'),
-                                 timing.get('timing'),
-                                 timing.get('traceback'))
+
+            if len(b_prev_results):
+                old_timing = b_prev_results.ix[0].to_dict()
+                diff = 0
+                if old_timing['timing']:
+                    diff = (old_timing['timing'] - timing.get('timing')) / timing['timing']
+                if old_timing['timing'] and diff < 0.005:
+                    # we had better result already -- skip saving this one
+                    log.debug("Benchmark %s was already timed at %(timing)f - skipping"
+                              % old_timing)
+                    # increment no change counter
+                    self.db.increment_nochange(checksum, rev=rev)
+                    continue
+                else:
+                    # we had worse results -- so remove them from
+                    # DB in favor of new ones to be introduced
+                    log.debug("Benchmark %s was timed before at %(timing)f - updating"
+                              % old_timing)
+                    log.debug("Diff: %.1f%%: %g, %g" % (diff * 100, timing['timing'], old_timing['timing']))
+                    self.db.update_result(checksum, rev, timestamp,
+                                          timing.get('loops'),
+                                          timing.get('timing'),
+                                          timing.get('traceback'))
+            else:
+                self.db.write_result(checksum, rev, timestamp,
+                                     timing.get('loops'),
+                                     timing.get('timing'),
+                                     timing.get('traceback'))
         self.db.commit_transaction()
 
         return any_succeeded, len(active_benchmarks)
@@ -302,16 +317,25 @@ class BenchmarkRunner(object):
                 need_to_run.append(b)
             elif (rerun_good_ones and existing_results[b.checksum]['ncalls']):
                 lim = self.nochange_rerun_limit
-                ucount = existing_results[b.checksum]['nnochange']
-                if ucount < lim:
-                    log.debug('Running benchmarks %s as nnochange ' \
-                              'counter %d < %d' %  (b.name, ucount, lim))
+                rlim = self.nochange_rerun_ratio
+                r = existing_results[b.checksum]
+                ucount = r['nnochange']
+                ratio = float(ucount) / max(r['nrun'], 1)
+                if ucount < lim or ratio < rlim:
+                    log.debug('Running benchmarks %s as nochange ' \
+                              'counter %d(%d) < %d or ' \
+                              'ratio %d%% < %d%%)' %
+                              (b.name, ucount, r['nrun'], lim,
+                               ratio * 100, rlim * 100))
                     need_to_run.append(b)
                 else:
                     # minimum timing has not changed in a while
                     # skip this stable benchmark
-                    log.debug('Skipping benchmarks %s as nnochange ' \
-                              'counter %d >= %d' % (b.name, ucount, lim))
+                    log.debug('Skipping benchmarks %s as nochange ' \
+                              'counter %d(%d) >= %d and ' \
+                              'ratio %d%% >= %d%%)' %
+                              (b.name, ucount, r['nrun'], lim,
+                               ratio * 100, rlim * 100))
 
         return need_to_run
 

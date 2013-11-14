@@ -36,6 +36,7 @@ class BenchmarkDB(object):
             Column('timing', sqltypes.Float),
             Column('traceback', sqltypes.Text),
             Column('nnochange', sqltypes.Integer),
+            Column('nrun', sqltypes.Integer),
         )
 
         self._blacklist = Table('blacklist', self._metadata,
@@ -82,7 +83,8 @@ class BenchmarkDB(object):
                        tab.c.revision == rev]
         stmt = (tab.update().
                 where(sql.and_(*select_args)).
-                values(nnochange=tab.c.nnochange + 1))
+                values(nnochange=tab.c.nnochange + 1,
+                       nrun=tab.c.nrun + 1))
         self.conn.execute(stmt)
 
     def restrict_to_benchmarks(self, benchmarks):
@@ -136,6 +138,21 @@ class BenchmarkDB(object):
         self.delete_benchmark_results(checksum)
         # TODO -- delete from benchmarks table
 
+    def update_result(self, checksum, revision, timestamp, ncalls,
+                      timing, traceback=None, overwrite=False):
+        """
+        update timing of benchmark, increase run count and reset no change count
+        """
+        tab = self._results
+        select_args = [tab.c.checksum == checksum,
+                       tab.c.revision == revision]
+        stmt = (tab.update().
+                where(sql.and_(*select_args)).
+                values(timestamp=timestamp, ncalls=ncalls,
+                       timing=timing, traceback=traceback,
+                       nnochange=0, nrun=tab.c.nrun + 1))
+        self.conn.execute(stmt)
+
     def write_result(self, checksum, revision, timestamp, ncalls,
                      timing, traceback=None, nnochange=0, overwrite=False):
         """
@@ -145,7 +162,7 @@ class BenchmarkDB(object):
         ins = ins.values(checksum=checksum, revision=revision,
                          timestamp=timestamp,
                          ncalls=ncalls, timing=timing, traceback=traceback,
-                         nnochange=nnochange)
+                         nnochange=nnochange, nrun=1)
         self.conn.execute(ins)  # XXX: return the result?
 
     def delete_error_results(self):
@@ -210,7 +227,8 @@ class BenchmarkDB(object):
         select_args = [tab.c.checksum == checksum]
         if rev: select_args.append(tab.c.revision == rev)
         stmt = sql.select([tab.c.timestamp, tab.c.revision, tab.c.ncalls,
-                           tab.c.timing, tab.c.traceback, tab.c.nnochange],
+                           tab.c.timing, tab.c.traceback, tab.c.nnochange,
+                           tab.c.nrun],
                           sql.and_(*select_args))
         results = self.conn.execute(stmt)
 
