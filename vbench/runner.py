@@ -36,10 +36,11 @@ class BenchmarkRunner(object):
         reverse: in reverse order (latest first)
         multires: cover all revisions but in the order increasing
                   temporal detail
-    existing : {'skip', 'min'}
+    existing : {'skip', 'min', 'keep'}
         'skip' : do not re-run the benchmark if already estimated
         'min'  : re-run and store possibly updated better (min)
                  estimate
+        'keep' : keep all results
     dependencies : list or None
         should be list of modules visible in cwd
     """
@@ -66,7 +67,7 @@ class BenchmarkRunner(object):
         self.start_date = start_date
         self.run_option = run_option
         self.run_order = run_order
-        assert(existing in ('skip', 'min'))
+        assert(existing in ('skip', 'min', 'keep'))
         self.existing = existing
 
         self.repo_path = repo_path
@@ -178,6 +179,7 @@ class BenchmarkRunner(object):
             return False, 0
 
         any_succeeded = False
+        now = datetime.now()
 
         results = self._run_revision(rev, active_benchmarks)
 
@@ -189,7 +191,7 @@ class BenchmarkRunner(object):
             if self.existing == 'min':
                 # verify that we have no information on this benchmark already
                 b_prev_results = self.db.get_benchmark_results(checksum, rev=rev)
-                assert(len(b_prev_results) < 2) # should be none or just 1 entry
+                b_prev_results = b_prev_results.groupby(level=0).min()
                 if len(b_prev_results):
                     old_timing = b_prev_results.ix[0].to_dict()
                     if old_timing['timing'] and (old_timing['timing'] < timing.get('timing')):
@@ -206,7 +208,8 @@ class BenchmarkRunner(object):
             self.db.write_result(checksum, rev, timestamp,
                                  timing.get('loops'),
                                  timing.get('timing'),
-                                 timing.get('traceback'))
+                                 timing.get('traceback'),
+                                 rundate=now)
 
         return any_succeeded, len(active_benchmarks)
 
@@ -279,7 +282,7 @@ class BenchmarkRunner(object):
     def _get_benchmarks_for_rev(self, rev):
         existing_results = self.db.get_rev_results(rev)
         need_to_run = []
-        rerun_good_ones = (self.existing == 'min')
+        rerun_good_ones = (self.existing in ('min', 'keep'))
         timestamp = self.repo.commits.timestamps[rev]
 
         for b in self.benchmarks:

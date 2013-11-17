@@ -3,6 +3,7 @@ from pandas import DataFrame
 from sqlalchemy import Table, Column, MetaData, create_engine, ForeignKey
 from sqlalchemy import types as sqltypes
 from sqlalchemy import sql
+from datetime import datetime
 
 import logging
 log = logging.getLogger('vb.db')
@@ -33,6 +34,7 @@ class BenchmarkDB(object):
             Column('ncalls', sqltypes.String(50)),
             Column('timing', sqltypes.Float),
             Column('traceback', sqltypes.Text),
+            Column('rundate', sqltypes.DateTime, nullable=False, primary_key=True),
         )
 
         self._blacklist = Table('blacklist', self._metadata,
@@ -108,14 +110,17 @@ class BenchmarkDB(object):
         # TODO -- delete from benchmarks table
 
     def write_result(self, checksum, revision, timestamp, ncalls,
-                     timing, traceback=None, overwrite=False):
+                     timing, traceback=None, rundate=None):
         """
 
         """
+        if rundate is None:
+            rundate = datetime.now()
         ins = self._results.insert()
         ins = ins.values(checksum=checksum, revision=revision,
                          timestamp=timestamp,
-                         ncalls=ncalls, timing=timing, traceback=traceback)
+                         ncalls=ncalls, timing=timing, traceback=traceback,
+                         rundate=rundate)
         self.conn.execute(ins)  # XXX: return the result?
 
     def delete_error_results(self):
@@ -180,7 +185,7 @@ class BenchmarkDB(object):
         select_args = [tab.c.checksum == checksum]
         if rev: select_args.append(tab.c.revision == rev)
         stmt = sql.select([tab.c.timestamp, tab.c.revision, tab.c.ncalls,
-                           tab.c.timing, tab.c.traceback],
+                           tab.c.timing, tab.c.traceback, tab.c.rundate],
                           sql.and_(*select_args))
         results = self.conn.execute(stmt)
 

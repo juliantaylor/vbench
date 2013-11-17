@@ -183,7 +183,7 @@ class Benchmark(object):
                 continue
             log.log(8, "Plotting for branch %s with %s revisions" % (branch, len(results_)))
 
-            timing = results_['timing']
+            timing = results_['timing'].groupby(level=0).min()
             if self.start_date is not None:
                 timing = timing.truncate(before=self.start_date)
 
